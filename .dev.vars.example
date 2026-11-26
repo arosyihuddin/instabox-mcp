@@ -1,0 +1,4 @@
+AUTH_PASSWORD=replace-with-a-long-random-password
+INSTABOX_API_KEY=your-instabox-api-key
+# Optional: static bearer for scripts and CLI clients
+# MCP_BEARER_TOKEN=replace-with-a-long-random-token

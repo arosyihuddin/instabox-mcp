@@ -41,6 +41,8 @@ before(async () => {
     AUTH_PASSWORD: "test-password",
     TOKEN_SECRET: "x".repeat(32),
   });
+  const { configureRuntime } = await import("../dist/config.js");
+  configureRuntime({ PUBLIC_URL: process.env.PUBLIC_URL, AUTH_PASSWORD: process.env.AUTH_PASSWORD, INSTABOX_API_KEY: process.env.INSTABOX_API_KEY, INSTABOX_API_URL: process.env.INSTABOX_API_URL });
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");

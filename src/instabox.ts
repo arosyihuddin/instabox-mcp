@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { config } from "./config.js";
+import { getConfig } from "./config.js";
 
 type Query = Record<string, string | number | boolean | string[] | undefined | null>;
 
@@ -10,6 +9,7 @@ export async function api<T = any>(
   path: string,
   opts: { body?: unknown; query?: Query; idempotent?: boolean; headers?: Record<string, string> } = {},
 ): Promise<T> {
+  const config = getConfig();
   const url = new URL(config.instaboxApiUrl + path);
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v === undefined || v === null) continue;
@@ -17,7 +17,7 @@ export async function api<T = any>(
   }
   const headers: Record<string, string> = { "X-API-Key": config.instaboxApiKey, Accept: "application/json" };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  if (opts.idempotent) headers["Idempotency-Key"] = randomUUID();
+  if (opts.idempotent) headers["Idempotency-Key"] = crypto.randomUUID();
   Object.assign(headers, opts.headers);
 
   const res = await fetch(url, {
@@ -60,7 +60,7 @@ export interface Operation {
 }
 
 /** Long-poll an operation until it finishes or the wait budget runs out. */
-export async function waitForOperation(op: Operation, maxSeconds = config.maxWaitSeconds) {
+export async function waitForOperation(op: Operation, maxSeconds = getConfig().maxWaitSeconds) {
   const deadline = Date.now() + maxSeconds * 1000;
   let cur = op;
   while (!["succeeded", "failed"].includes(cur.state)) {

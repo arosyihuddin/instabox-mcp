@@ -6,7 +6,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { api } from "./instabox.js";
-import { config } from "./config.js";
+import { getConfig } from "./config.js";
 
 const DISPLAY = ":1";
 const m = (id: string) => `/v1/machines/${encodeURIComponent(id)}`;
@@ -91,7 +91,7 @@ export function registerDesktopTools(server: McpServer) {
     let s = await desktop(id, { action: "start", ...size });
     if (!s.installed) {
       if (!s.installing) s = await desktop(id, { action: "install" });
-      const deadline = Date.now() + config.maxWaitSeconds * 1000;
+      const deadline = Date.now() + getConfig().maxWaitSeconds * 1000;
       while (!s.installed) {
         if (s.failed) throw new Error(`Desktop install failed: ${s.log ?? "see /tmp/instabox-desktop-install.log"}`);
         if (Date.now() > deadline) return [ok("The desktop is still installing. Call desktop_start again in about 20 seconds.")];

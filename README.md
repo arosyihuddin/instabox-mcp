@@ -56,39 +56,89 @@ read and selection tools work with any key. A value you hand to `set_secret` pas
 chat, so for high-value credentials prefer the InstaBox dashboard or CLI and let the model only
 select them.
 
-## Configuration
+## Cloudflare Workers configuration
 
-| Variable | Required | |
-|---|---|---|
-| `PUBLIC_URL` | yes | Public HTTPS URL, no trailing slash. MCP endpoint is `$PUBLIC_URL/mcp` |
-| `INSTABOX_API_KEY` | yes | From the InstaBox dashboard → API keys |
-| `AUTH_PASSWORD` | yes | What you type on the login page |
-| `TOKEN_SECRET` | yes | ≥32 chars, `openssl rand -hex 32`. Rotating it signs out every client |
-| `PORT` | no | Default 3000 (Railway sets it) |
-| `ACCESS_TOKEN_TTL_SECONDS` / `REFRESH_TOKEN_TTL_SECONDS` | no | Default 1h / 30d |
-| `MAX_WAIT_SECONDS` | no | Default 45 |
-| `MCP_BEARER_TOKEN` | no | Static bearer (≥32 chars) that `/mcp` also accepts, for Claude Code, scripts and curl. Unset = OAuth only |
-| `CIMD_ENABLED` | no | Default `true`. Set `false` to stop advertising Client ID Metadata Documents, so clients use dynamic registration |
-| `CIMD_ALLOWED_HOSTS` | no | Comma-separated hosts allowed to serve client metadata (e.g. `claude.ai`, `*.example.com`). Empty = any public host |
+The Worker uses Web Standard APIs and Cloudflare KV. No Node.js server, container, VPS, or
+Cloudflare Tunnel is required.
 
-## Deploy
+| Setting | Where | Required | Purpose |
+|---|---|---:|---|
+| `PUBLIC_URL` | `wrangler.jsonc` vars | yes | Canonical HTTPS origin; MCP resource is `${PUBLIC_URL}/mcp` |
+| `AUTH_PASSWORD` | Worker secret | yes | Password for the owner login page |
+| `INSTABOX_API_KEY` | Worker secret | yes | InstaBox dashboard API key |
+| `MCP_BEARER_TOKEN` | Worker secret | no | Optional static bearer for scripts and CLI clients |
+| `INSTABOX_API_URL` | `wrangler.jsonc` vars | no | Defaults to `https://api.instabox.sh` |
+| `MAX_WAIT_SECONDS` | `wrangler.jsonc` vars | no | Defaults to 45 seconds |
+| `OAUTH_KV` | KV binding | yes | Durable OAuth clients, grants, authorization codes and tokens |
 
-Every push to `main` builds `ghcr.io/<owner>/instabox-mcp:latest` (amd64 + arm64) plus a
-`sha-xxxxxxx` tag; a `v1.2.3` git tag also publishes `1.2.3` and `1.2`.
-If the repo is private, the GHCR package is private too: either make the package public
-(GitHub → Packages → instabox-mcp → Package settings) or give your host registry credentials.
+`TOKEN_SECRET`, `CIMD_ENABLED`, and `CIMD_ALLOWED_HOSTS` are no longer application settings.
+Cloudflare's OAuth Provider manages token signing, storage, DCR, and CIMD metadata fetching.
 
-**Railway**: New project → Deploy from GitHub repo (it builds the Dockerfile), or Docker image
-`ghcr.io/<owner>/instabox-mcp:latest`. Add the env vars, generate a domain, set `PUBLIC_URL` to it,
-health check path `/healthz`.
+## Deploy to Cloudflare
 
-**VPS**: `cp .env.example .env`, fill it in, then `DOMAIN=mcp.example.com docker compose up -d`.
-Caddy gets the HTTPS certificate automatically.
+1. Install dependencies and authenticate Wrangler:
 
-Already running nginx, Traefik or another proxy? Delete the `caddy` service and its volume, publish
-the app on localhost only (`ports: ["127.0.0.1:3000:3000"]`) and proxy your domain to it. Give the
-proxy a read timeout above 60s (lifecycle waits run up to ~45s) and keep it to one proxy hop,
-since the app trusts exactly one `X-Forwarded-For` hop for the login rate limit.
+   ```sh
+   bun install
+   node_modules/.bin/wrangler login
+   ```
+
+2. Create the OAuth KV namespace:
+
+   ```sh
+   node_modules/.bin/wrangler kv namespace create OAUTH_KV
+   ```
+
+   Copy the returned namespace ID into `wrangler.jsonc`, replacing
+   `REPLACE_WITH_KV_NAMESPACE_ID`.
+
+3. Set `PUBLIC_URL` in `wrangler.jsonc` to the final HTTPS Worker URL or custom domain. It must
+   match the URL clients will use, without a trailing slash. The protected MCP URL is
+   `${PUBLIC_URL}/mcp`.
+
+4. Add secrets (Wrangler prompts for each value):
+
+   ```sh
+   node_modules/.bin/wrangler secret put AUTH_PASSWORD
+   node_modules/.bin/wrangler secret put INSTABOX_API_KEY
+   # Optional:
+   node_modules/.bin/wrangler secret put MCP_BEARER_TOKEN
+   ```
+
+5. Typecheck, test, and deploy:
+
+   ```sh
+   bun run typecheck
+   bun run test
+   bun run deploy
+   ```
+
+6. Verify `https://<your-domain>/healthz` and connect clients to
+   `https://<your-domain>/mcp`.
+
+OAuth data is persisted in KV and survives Worker isolates and deployments. The first deployment
+uses the new Cloudflare OAuth storage, so clients authorized by the previous Express server must
+sign in again; old custom HMAC tokens cannot be imported into the new provider.
+
+## Local development
+
+Create local secrets and start the Worker on the configured local origin:
+
+```sh
+cp .dev.vars.example .dev.vars
+# Edit .dev.vars with AUTH_PASSWORD and INSTABOX_API_KEY
+node_modules/.bin/wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1 --port 8787
+```
+
+Then open `http://localhost:8787/healthz`; the MCP endpoint is
+`http://localhost:8787/mcp`. Wrangler uses local KV storage for development.
+
+Run checks separately:
+
+```sh
+bun run typecheck
+bun run test
+```
 
 ## Connect a client
 
@@ -99,19 +149,16 @@ where it will send you back to, so check that before you type the password.
 Two ways of identifying are supported:
 
 - **Client ID Metadata Documents (CIMD)**, which Claude prefers: the client's `client_id` is an
-  HTTPS URL (e.g. `https://claude.ai/oauth/mcp-oauth-client-metadata`). The server fetches that
-  JSON once and caches it (5 min to 24 h, following `Cache-Control`). If a later refetch fails,
-  it keeps using the last good copy for up to 7 days. The fetch is
-  SSRF-guarded: https only, public IPs only (pinned against DNS rebinding), no redirects,
-  `application/json` only, 16 KB and 5 s limits. Claude Code's loopback callbacks
-  (`http://localhost:<any port>/callback`, `http://127.0.0.1:<any port>/callback`) match without the port.
+  HTTPS URL (e.g. `https://claude.ai/oauth/mcp-oauth-client-metadata`). The Cloudflare OAuth
+  Provider resolves and validates the document. This Worker enables the
+  `global_fetch_strictly_public` compatibility flag for public-network-only metadata fetching.
+  Claude Code's loopback callbacks (`http://localhost:<port>/callback` and
+  `http://127.0.0.1:<port>/callback`) are accepted by the provider's redirect URI validation.
 - **Dynamic client registration (DCR)**, the fallback, used by ChatGPT and older clients.
 
-If Claude's sign-in fails with `invalid_client ... Could not load client metadata document`, look
-for a `[cimd]` line in the server log. Cloudflare sometimes answers `403` to requests for
-claude.ai's metadata that come from datacenter IPs
-([anthropics/claude-ai-mcp#650](https://github.com/anthropics/claude-ai-mcp/issues/650)). Set
-`CIMD_ENABLED=false` and reconnect: Claude then falls back to DCR.
+If Claude's sign-in fails while resolving its client metadata document, inspect the Worker logs
+for the OAuth Provider's client-metadata error. DCR remains enabled for clients that use dynamic
+registration.
 
 **Claude.ai**: Settings → Connectors → Add custom connector → paste the URL. If asked, choose
 **Sign in now** and the **Register** auth client (not Claude identity, not an API key).
@@ -144,21 +191,13 @@ then `/mcp` to sign in). If you'd rather skip the browser, set `MCP_BEARER_TOKEN
       -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-## Local development
-
-    npm install
-    cp .env.example .env   # PUBLIC_URL=http://localhost:3000
-    npm run build && node --env-file=.env dist/index.js
-    npm test               # builds, then runs test/*.test.mjs against a mock InstaBox API
-
-Test with `npx @modelcontextprotocol/inspector` against `http://localhost:3000/mcp`.
-
 ## Security notes
 
-- Anyone who logs in can run commands on your machines, so use a long password.
-  The login form is rate limited (10 tries per 15 min per IP).
+- Anyone who logs in can run commands on your machines, so use a long password. Protect the
+  authorization endpoint with Cloudflare rate limiting/WAF rules if it is exposed publicly.
 - `MCP_BEARER_TOKEN` never expires and skips the login page, so treat it like the password:
-  long, random, and rotated if it leaks (change the env var and restart). It is compared in
-  constant time. OAuth tokens keep working alongside it.
-- OAuth state is stateless (HMAC-signed with `TOKEN_SECRET`), so redeploys never sign you out.
-- Requires HTTPS in production; the OAuth library refuses a non-HTTPS issuer except on localhost.
+  long, random, and rotate it with `wrangler secret put MCP_BEARER_TOKEN` if it leaks. It is
+  compared in constant time. OAuth tokens keep working alongside it.
+- OAuth grants and tokens are stored in KV, not in isolate memory. Keep the KV namespace bound
+  across deployments; deleting it revokes all OAuth sessions.
+- Production `PUBLIC_URL` must use HTTPS and exactly match the public origin used by clients.
