@@ -10,6 +10,9 @@
     "MAX_WAIT_SECONDS": "45"
   },
   "kv_namespaces": [
-    { "binding": "OAUTH_KV" }
+    {
+      "binding": "OAUTH_KV",
+      "id": "76aa3dc9c909404bbf78cb9e596cae72"
+    }
   ]
 }

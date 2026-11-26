@@ -76,22 +76,23 @@ Cloudflare's OAuth Provider manages token signing, storage, DCR, and CIMD metada
 
 ## Deploy through GitHub (no local deploy CLI)
 
-Deployments are handled by **Cloudflare Workers Builds**. You do not need to create the KV
-namespace manually or commit an account-specific namespace ID. Wrangler supports automatic
-resource provisioning: when Workers Builds deploys this configuration, Cloudflare creates the
-`OAUTH_KV` namespace and binds it to the Worker. For Git-based deployments, the generated ID is
-managed by Cloudflare and is not written back to this repository.
+The production KV namespace is created manually in Cloudflare and its namespace ID is declared
+in `wrangler.jsonc`. This is intentional: omitting the ID makes Wrangler attempt to provision a
+new namespace, which fails when `instabox-mcp-oauth-kv` already exists. The namespace ID is an
+identifier, not an access credential; access is controlled by the Worker binding and Cloudflare
+permissions.
 
 1. Push this repository to GitHub.
 2. In Cloudflare Dashboard, open **Workers & Pages → Create application → GitHub**, authorize
-   GitHub, and select this repository and the `main` branch. Alternatively, connect the repository
-   from an existing Worker under **Settings → Builds**. The Worker name must be `instabox-mcp`.
-3. Configure Workers Builds:
+   GitHub, and select this repository and the `main` branch. If the Worker already exists, open
+   **Workers & Pages → instabox-mcp → Settings → Builds** and connect this repository instead.
+   Keep the Worker name as `instabox-mcp`.
+3. Configure the Workers Builds settings:
    - Build command: `bun run test`
-   - Deploy command: `bun run deploy`
+   - Deploy command: `bun run deploy` (runs `wrangler deploy --keep-vars`)
    - Root directory: `/` (repository root)
-4. In **Workers & Pages → instabox-mcp → Settings → Variables and Secrets**, add these runtime
-   values for production:
+   - Production branch: `main`
+4. In **Workers & Pages → instabox-mcp → Settings → Variables and Secrets**, configure:
    - `PUBLIC_URL` (plain text): the final HTTPS `workers.dev` URL or custom domain, without a
      trailing slash.
    - `AUTH_PASSWORD` (secret): owner login password.
@@ -99,8 +100,11 @@ managed by Cloudflare and is not written back to this repository.
    - `MCP_BEARER_TOKEN` (optional secret): static bearer token, minimum 32 characters.
    - `INSTABOX_API_URL` and `MAX_WAIT_SECONDS` are already configured as non-secret defaults in
      `wrangler.jsonc`.
-5. Save the settings and push a commit to `main`. Cloudflare builds, tests, provisions `OAUTH_KV`
-   if needed, and deploys automatically. The protected MCP endpoint is `${PUBLIC_URL}/mcp`.
+5. Confirm the existing `OAUTH_KV` namespace is the one referenced by the ID in `wrangler.jsonc`.
+   Do not remove or recreate it; it stores OAuth clients, grants, authorization codes and tokens.
+6. Save the settings. Every push to `main` now triggers Cloudflare to install dependencies, run
+   the build and tests, then deploy the Worker. No local deploy command is needed. The MCP endpoint
+   is `${PUBLIC_URL}/mcp`.
 
 The MCP endpoint accepts either an OAuth access token issued by this Worker or, when configured,
 `MCP_BEARER_TOKEN`. These are alternative credentials: clients use one method per request.
@@ -109,10 +113,9 @@ is never an MCP client credential. Static bearer acceptance is a compatibility m
 replace the standard OAuth authorization flow.
 
 Cloudflare Workers Builds uses the Wrangler version declared in `package.json` and deploys on each
-push to the connected production branch. Secrets and runtime variables belong in the Cloudflare
-Dashboard, not in GitHub or the repository. See the
-[Workers Builds documentation](https://developers.cloudflare.com/workers/ci-cd/builds/) and
-[Wrangler automatic resource provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
+push to the connected production branch. Runtime secrets belong in the Cloudflare Dashboard;
+the KV namespace ID is kept in `wrangler.jsonc` because Wrangler requires it to bind the existing
+namespace. See the [Workers Builds documentation](https://developers.cloudflare.com/workers/ci-cd/builds/).
 
 OAuth data is persisted in KV and survives Worker isolates and deployments. The first deployment
 uses the new Cloudflare OAuth storage, so clients authorized by the previous Express server must
