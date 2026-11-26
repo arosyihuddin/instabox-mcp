@@ -1,4 +1,6 @@
+PUBLIC_URL=http://localhost:8787
 AUTH_PASSWORD=replace-with-a-long-random-password
 INSTABOX_API_KEY=your-instabox-api-key
-# Optional: static bearer for scripts and CLI clients
+# Optional: static bearer compatibility mode (minimum 32 characters)
+# OAuth remains the recommended MCP authentication method.
 # MCP_BEARER_TOKEN=replace-with-a-long-random-token

@@ -5,11 +5,10 @@
   "compatibility_date": "2026-11-26",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "vars": {
-    "PUBLIC_URL": "http://localhost:8787",
     "INSTABOX_API_URL": "https://api.instabox.sh",
     "MAX_WAIT_SECONDS": "45"
   },
   "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "local-instabox-oauth-kv" }
+    { "binding": "OAUTH_KV" }
   ]
 }

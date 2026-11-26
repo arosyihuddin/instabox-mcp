@@ -63,10 +63,10 @@ Cloudflare Tunnel is required.
 
 | Setting | Where | Required | Purpose |
 |---|---|---:|---|
-| `PUBLIC_URL` | `wrangler.jsonc` vars | yes | Canonical HTTPS origin; MCP resource is `${PUBLIC_URL}/mcp` |
+| `PUBLIC_URL` | Worker environment variable (`.dev.vars` locally; Cloudflare dashboard in production) | yes | Canonical HTTPS origin; MCP resource is `${PUBLIC_URL}/mcp` |
 | `AUTH_PASSWORD` | Worker secret | yes | Password for the owner login page |
 | `INSTABOX_API_KEY` | Worker secret | yes | InstaBox dashboard API key |
-| `MCP_BEARER_TOKEN` | Worker secret | no | Optional static bearer for scripts and CLI clients |
+| `MCP_BEARER_TOKEN` | Worker secret | no | Optional static bearer compatibility mode; OAuth is recommended |
 | `INSTABOX_API_URL` | `wrangler.jsonc` vars | no | Defaults to `https://api.instabox.sh` |
 | `MAX_WAIT_SECONDS` | `wrangler.jsonc` vars | no | Defaults to 45 seconds |
 | `OAUTH_KV` | KV binding | yes | Durable OAuth clients, grants, authorization codes and tokens |
@@ -74,47 +74,45 @@ Cloudflare Tunnel is required.
 `TOKEN_SECRET`, `CIMD_ENABLED`, and `CIMD_ALLOWED_HOSTS` are no longer application settings.
 Cloudflare's OAuth Provider manages token signing, storage, DCR, and CIMD metadata fetching.
 
-## Deploy to Cloudflare
+## Deploy through GitHub (no local deploy CLI)
 
-1. Install dependencies and authenticate Wrangler:
+Deployments are handled by **Cloudflare Workers Builds**. You do not need to create the KV
+namespace manually or commit an account-specific namespace ID. Wrangler supports automatic
+resource provisioning: when Workers Builds deploys this configuration, Cloudflare creates the
+`OAUTH_KV` namespace and binds it to the Worker. For Git-based deployments, the generated ID is
+managed by Cloudflare and is not written back to this repository.
 
-   ```sh
-   bun install
-   node_modules/.bin/wrangler login
-   ```
+1. Push this repository to GitHub.
+2. In Cloudflare Dashboard, open **Workers & Pages → Create application → GitHub**, authorize
+   GitHub, and select this repository and the `main` branch. Alternatively, connect the repository
+   from an existing Worker under **Settings → Builds**. The Worker name must be `instabox-mcp`.
+3. Configure Workers Builds:
+   - Build command: `bun run test`
+   - Deploy command: `bun run deploy`
+   - Root directory: `/` (repository root)
+4. In **Workers & Pages → instabox-mcp → Settings → Variables and Secrets**, add these runtime
+   values for production:
+   - `PUBLIC_URL` (plain text): the final HTTPS `workers.dev` URL or custom domain, without a
+     trailing slash.
+   - `AUTH_PASSWORD` (secret): owner login password.
+   - `INSTABOX_API_KEY` (secret): InstaBox dashboard API key.
+   - `MCP_BEARER_TOKEN` (optional secret): static bearer token, minimum 32 characters.
+   - `INSTABOX_API_URL` and `MAX_WAIT_SECONDS` are already configured as non-secret defaults in
+     `wrangler.jsonc`.
+5. Save the settings and push a commit to `main`. Cloudflare builds, tests, provisions `OAUTH_KV`
+   if needed, and deploys automatically. The protected MCP endpoint is `${PUBLIC_URL}/mcp`.
 
-2. Create the OAuth KV namespace:
+The MCP endpoint accepts either an OAuth access token issued by this Worker or, when configured,
+`MCP_BEARER_TOKEN`. These are alternative credentials: clients use one method per request.
+`INSTABOX_API_KEY` is separate and is only used by the Worker for upstream InstaBox API calls; it
+is never an MCP client credential. Static bearer acceptance is a compatibility mode and does not
+replace the standard OAuth authorization flow.
 
-   ```sh
-   node_modules/.bin/wrangler kv namespace create OAUTH_KV
-   ```
-
-   Copy the returned namespace ID into `wrangler.jsonc`, replacing
-   `REPLACE_WITH_KV_NAMESPACE_ID`.
-
-3. Set `PUBLIC_URL` in `wrangler.jsonc` to the final HTTPS Worker URL or custom domain. It must
-   match the URL clients will use, without a trailing slash. The protected MCP URL is
-   `${PUBLIC_URL}/mcp`.
-
-4. Add secrets (Wrangler prompts for each value):
-
-   ```sh
-   node_modules/.bin/wrangler secret put AUTH_PASSWORD
-   node_modules/.bin/wrangler secret put INSTABOX_API_KEY
-   # Optional:
-   node_modules/.bin/wrangler secret put MCP_BEARER_TOKEN
-   ```
-
-5. Typecheck, test, and deploy:
-
-   ```sh
-   bun run typecheck
-   bun run test
-   bun run deploy
-   ```
-
-6. Verify `https://<your-domain>/healthz` and connect clients to
-   `https://<your-domain>/mcp`.
+Cloudflare Workers Builds uses the Wrangler version declared in `package.json` and deploys on each
+push to the connected production branch. Secrets and runtime variables belong in the Cloudflare
+Dashboard, not in GitHub or the repository. See the
+[Workers Builds documentation](https://developers.cloudflare.com/workers/ci-cd/builds/) and
+[Wrangler automatic resource provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
 
 OAuth data is persisted in KV and survives Worker isolates and deployments. The first deployment
 uses the new Cloudflare OAuth storage, so clients authorized by the previous Express server must
@@ -196,8 +194,10 @@ then `/mcp` to sign in). If you'd rather skip the browser, set `MCP_BEARER_TOKEN
 - Anyone who logs in can run commands on your machines, so use a long password. Protect the
   authorization endpoint with Cloudflare rate limiting/WAF rules if it is exposed publicly.
 - `MCP_BEARER_TOKEN` never expires and skips the login page, so treat it like the password:
-  long, random, and rotate it with `wrangler secret put MCP_BEARER_TOKEN` if it leaks. It is
-  compared in constant time. OAuth tokens keep working alongside it.
+  long, random, and rotate it from **Workers & Pages → instabox-mcp → Settings → Variables
+  and Secrets** if it leaks. It is compared in constant time. OAuth tokens keep working alongside it.
+  This is a compatibility alternative, not an OAuth-issued MCP access token. The MCP authorization
+  profile expects server-issued, resource-bound tokens, so use OAuth wherever the client supports it.
 - OAuth grants and tokens are stored in KV, not in isolate memory. Keep the KV namespace bound
   across deployments; deleting it revokes all OAuth sessions.
-- Production `PUBLIC_URL` must use HTTPS and exactly match the public origin used by clients.
+- Production `PUBLIC_URL` must use HTTPS and exactly match the public origin used by clients. Keep it in the Worker environment, not in source control.
